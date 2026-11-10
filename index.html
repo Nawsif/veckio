@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Veck.io</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <link rel="icon" href="favicon/favicon.ico">
+    
+    <link rel="preload" href="main.css" as="style" onload="this.rel='stylesheet'">
+    <noscript><link rel="stylesheet" href="main.css"></noscript>
+
+    <style>
+        @media (max-width: 768px) {
+            body { overflow: hidden; }
+        }
+
+        /* Warning Overlay */
+        #warning-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            color: #ff5555;
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 19px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            z-index: 9999;
+            pointer-events: none;
+            line-height: 1.4;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+<body style="background:black; color:black; margin:0; padding:0;">
+
+    <!-- Warning Overlay -->
+    <div id="warning-overlay">
+        This game is very unstable.<br>
+        Please refresh the whole site if it doesn't work.
+    </div>
+
+    <div id="videoad"></div>
+
+    <div id="unity-container">
+        <canvas id="unity-canvas"></canvas>
+    </div>
+
+    <div id="unity-loading-container">
+        <div id="loading-percentage">1%</div>
+        <img src="logo.webp" class="logo" alt="Veck.io" decoding="async">
+        <div id="unity-loading-bar">
+            <div id="unity-loading-bar-inner"></div>
+        </div>
+    </div>
+
+<script>
+
+// Leave this empty for the local proxy. For an off-device relay, set its HTTPS origin.
+const REMOTE_RELAY = "https://still-fog-690b.nawsifsspammail.workers.dev/";
+
+(() => {
+    const relay = new URL(REMOTE_RELAY || window.location.origin);
+    const veckHost = /^(?:(?:files|usa-[1-5]|fra-[1-3]|asia-[1-2])\.)?veck\.io$/;
+
+    function route(input, socket = false) {
+        const url = new URL(input instanceof Request ? input.url : input, document.baseURI);
+        if (!veckHost.test(url.hostname) || url.port) return input;
+        if (socket ? !["ws:", "wss:"].includes(url.protocol) :
+            !["http:", "https:"].includes(url.protocol)) return input;
+
+        const target = new URL(relay);
+        if (socket) target.protocol = target.protocol === "https:" ? "wss:" : "ws:";
+        target.pathname = "/proxy/" + url.hostname + url.pathname;
+        target.search = url.search;
+        return target.href;
+    }
+
+    const fetchOriginal = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+        const routed = route(input);
+        return fetchOriginal(routed !== input && input instanceof Request
+            ? new Request(routed, input) : routed, init);
+    };
+
+    const openOriginal = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (method, url, ...args) {
+        return openOriginal.call(this, method, route(url), ...args);
+    };
+
+    window.WebSocket = new Proxy(window.WebSocket, {
+        construct(target, [url, ...args], newTarget) {
+            return Reflect.construct(target, [route(url, true), ...args], newTarget);
+        }
+    });
+})();
+
+// Hide warning overlay after 1 second
+setTimeout(() => {
+    const overlay = document.getElementById('warning-overlay');
+    if (overlay) {
+        overlay.style.transition = 'opacity 0.6s ease';
+        overlay.style.opacity = '0';
+        setTimeout(() => overlay.remove(), 600);
+    }
+}, 1000);
+
+// SDK Selection
+const url = window.location.href;
+const params = new URLSearchParams(window.location.search);
+let sdkScriptSrc = "sdk.js";
+
+if (url.includes("discord")) sdkScriptSrc = "discord_sdk.js";
+else if (params.has("cg") || url.includes("crazygames")) sdkScriptSrc = "cg_sdk.js";
+else if (params.has("yandex") || url.includes("/yandex")) sdkScriptSrc = "yandex_sdk.js";
+else if (params.has("msn") || url.includes("/msn")) sdkScriptSrc = "msn_sdk.js";
+
+function sendPopState() {
+    window.unityInstance?.SendMessage("BrowserHistoryManager", "PopState", window.location.pathname);
+}
+
+window.addEventListener("popstate", sendPopState);
+
+// Unity Loading Functions
+function getSafeBuildURL() {
+    return window.SDK?.getBuildURL?.() || "./Build";
+}
+
+function getSafeStreamingAssetsUrl() {
+    return window.SDK?.getStreamingAssetsUrl?.() || "./StreamingAssets";
+}
+
+function getSafeStaticResolutionScaleMulti() {
+    return window.SDK?.getStaticResolutionScaleMulti?.() || 1;
+}
+
+function loadGame() {
+    const buildUrl = getSafeBuildURL();
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+    const scaleMulti = getSafeStaticResolutionScaleMulti();
+
+    const config = {
+        dataUrl: buildUrl + "/8a504c48146421da0234614836f65d88.data",
+        frameworkUrl: buildUrl + "/1d2f19510632460528ffd44443071fbc.framework.js",
+        codeUrl: buildUrl + "/ac23b49e68268e84c7ecf27d5971a3c4.wasm",
+        streamingAssetsUrl: getSafeStreamingAssetsUrl(),
+        companyName: "LEGiON Platforms",
+        productName: "Veck.io",
+        productVersion: "15z74851616",
+        devicePixelRatio: scaleMulti * (isMobile ? 1.3 : 1.0)
+    };
+
+    const canvas = document.getElementById("unity-canvas");
+    const loadingContainer = document.getElementById("unity-loading-container");
+    const loadingBar = document.getElementById("unity-loading-bar-inner");
+    const loadingText = document.getElementById("loading-percentage");
+
+    let progress = 51;
+    const progressInterval = setInterval(() => {
+        progress = Math.min(progress + 0.15, 99);
+        loadingBar.style.width = progress + "%";
+        loadingText.textContent = Math.floor(progress) + "%";
+    }, 100);
+
+    function showLoadError(error) {
+        clearInterval(progressInterval);
+        loadingText.textContent = "Game failed to load. Refresh to try again.";
+        console.error("Unity failed to load:", error);
+    }
+
+    async function startUnity() {
+        try {
+            const unityInstance = await createUnityInstance(canvas, config, (p) => {
+                const actual = Math.min(Math.max(p * 100, 51), 99);
+                if (actual > progress) progress = actual;
+                loadingBar.style.width = progress + "%";
+                loadingText.textContent = Math.floor(progress) + "%";
+            });
+            window.unityInstance = unityInstance;
+            sendPopState();
+            clearInterval(progressInterval);
+            loadingBar.style.width = "100%";
+            loadingText.textContent = "100%";
+            setTimeout(() => loadingContainer.remove(), 300);
+        } catch (error) {
+            showLoadError(error);
+        }
+    }
+
+    if (typeof createUnityInstance === 'function') {
+        startUnity();
+    } else {
+        const loaderScript = document.createElement("script");
+        loaderScript.src = buildUrl + "/f2ce1cb23b0715cab923f62d566f4190.loader.js";
+        loaderScript.onload = startUnity;
+        loaderScript.onerror = () => showLoadError("Failed to load Unity loader");
+        document.body.appendChild(loaderScript);
+    }
+}
+
+function loadSDK(source) {
+    const script = document.createElement("script");
+    script.src = source + "?v=14";
+    script.onload = loadGame;
+    script.onerror = () => {
+        if (source !== "sdk.js") {
+            loadSDK("sdk.js");
+            return;
+        }
+        document.getElementById("loading-percentage").textContent =
+            "Game SDK failed to load. Refresh to try again.";
+    };
+    document.head.appendChild(script);
+}
+
+loadSDK(sdkScriptSrc);
+</script>
+
+<script src="s/cursor.js" defer></script>
+<script src="s/pwa.js" defer></script>
+
+</body>
+</html>
